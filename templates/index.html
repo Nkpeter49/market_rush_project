@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Market Rush</title>
+    <style>
+        body { font-family: monospace; background: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; background: #1e293b; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); margin-bottom: 20px; }
+        input, button { background: #334155; color: #fff; border: 1px solid #475569; padding: 8px 12px; margin: 5px 0; border-radius: 4px; font-family: monospace; }
+        button { cursor: pointer; background: #3b82f6; border: none; }
+        button:hover { background: #2563eb; }
+        .log { background: #000; color: #00ffcc; padding: 10px; border-radius: 4px; height: 150px; overflow-y: auto; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Market Rush</h1>
+        <p>Two players · Five rounds · $1,000 starting virtual capital</p>
+    </div>
+
+    <div class="container">
+        <h2>Create or join a room</h2>
+        <div>
+            <label>Display name</label><br>
+            <input type="text" id="name-input" value="Trader">
+            <button onclick="setName()">Update name</button>
+        </div>
+        <div style="margin-top: 10px;">
+            <button onclick="createRoom()">Create room</button>
+        </div>
+        <div style="margin-top: 10px;">
+            <label>Room code</label><br>
+            <input type="text" id="room-input" placeholder="6-character code">
+            <button onclick="joinRoom()">Join room</button>
+        </div>
+        <p id="connection-status" style="margin-top: 15px; color: #94a3b8;">Not connected.</p>
+        <p id="room-status" style="font-weight: bold; color: #38bdf8;"></p>
+    </div>
+
+    <!-- AI Market Intelligence Banner -->
+    <div id="ai-news-banner" style="background: #1e1e2f; color: #00ffcc; padding: 10px; margin-bottom: 15px; border-radius: 6px; font-family: monospace; max-width: 800px; margin-left: auto; margin-right: auto;">
+      <strong>AI Market Intelligence:</strong> <span id="news-text">Initializing local Ollama stream...</span>
+    </div>
+
+    <div class="container">
+        <h2>Allocate capital</h2>
+        <p>Allocations must be non-negative and cannot exceed your balance.</p>
+        <div id="assets-container"></div>
+        <button id="submit-btn" onclick="submitAllocation()" disabled>Submit allocation</button>
+    </div>
+
+    <div class="container">
+        <h2>WebSocket log</h2>
+        <div id="log" class="log">Create or join a room to start testing.</div>
+    </div>
+
+    <script>
+        let ws = null;
+        let playerId = Math.random().toString(36).substring(2, 8);
+        let currentRoomCode = "";
+
+        function logMessage(msg) {
+            const logEl = document.getElementById("log");
+            logEl.innerHTML += `<div>${new Date().toLocaleTimeString()} ${msg}</div>`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function connect(roomCode) {
+            if (ws) ws.close();
+            currentRoomCode = roomCode;
+            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${proto}//${window.location.host}/ws/${roomCode}/${playerId}`);
+
+            ws.onopen = () => {
+                document.getElementById("connection-status").innerText = "WebSocket connected";
+                logMessage(`Connected to ${roomCode}`);
+                setName();
+            };
+
+            ws.onclose = () => {
+                document.getElementById("connection-status").innerText = "WebSocket disconnected";
+                logMessage("Disconnected.");
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === "state_update") {
+                    updateUI(data.room);
+                }
+            };
+        }
+
+        function createRoom() {
+            const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+            document.getElementById("room-input").value = code;
+            connect(code);
+        }
+
+        function joinRoom() {
+            const code = document.getElementById("room-input").value.trim().toUpperCase();
+            if (code) connect(code);
+        }
+
+        function setName() {
+            const name = document.getElementById("name-input").value;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: "set_name", name: name }));
+            }
+        }
+
+        function updateUI(room) {
+            document.getElementById("room-status").innerText = 
+                `Room ${room.room_code} | Round ${room.round}/${room.total_rounds} | ${room.status} | ` +
+                room.players.map(p => `${p.name}: $${p.balance} ${p.round_submitted ? '(submitted)' : ''}`).join(' | ');
+
+            // Update AI News headline dynamically from server state
+            document.getElementById("news-text").innerText = room.news;
+
+            const assetsContainer = document.getElementById("assets-container");
+            assetsContainer.innerHTML = "";
+            
+            room.assets.forEach(asset => {
+                const price = room.prices[asset];
+                const div = document.createElement("div");
+                div.style.margin = "10px 0";
+                div.innerHTML = `
+                    <label>${asset} (Price: $${price})</label><br>
+                    <input type="number" id="asset-${asset}" value="0" min="0" style="width: 150px;">
+                `;
+                assetsContainer.appendChild(div);
+            });
+
+            document.getElementById("submit-btn").disabled = (room.status !== "playing");
+        }
+
+        function submitAllocation() {
+            const allocations = {};
+            document.querySelectorAll('[id^="asset-"]').forEach(input => {
+                const assetName = input.id.replace("asset-", "");
+                allocations[assetName] = parseFloat(input.value) || 0;
+            });
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: "submit_allocation", allocations: allocations }));
+                logMessage("Allocation submitted; waiting for the other player.");
+            }
+        }
+    </script>
+</body>
+</html>
